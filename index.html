@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Girl Scout Cookie Donation Tabulator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #00ae58;
+            text-align: center;
+        }
+        .container {
+            background-color: #f9f9f9;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+        }
+        button {
+            background-color: #00ae58;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #009149;
+        }
+        #status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .progress-area {
+            margin-top: 20px;
+        }
+        #resultsTable {
+            margin-top: 20px;
+            overflow-x: auto;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .actions {
+            display: flex;
+            gap: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Girl Scout Cookie Donation Tabulator</h1>
+    <div class="container">
+        <div class="form-group">
+            <label for="fileInput">Select Cookie Orders Excel File:</label>
+            <input type="file" id="fileInput" accept=".xlsx, .xls" />
+        </div>
+        
+        <div class="actions">
+            <button id="processButton">Process File</button>
+            <button id="downloadButton" style="display: none;">Download CSV</button>
+        </div>
+        
+        <div id="status" style="display: none;"></div>
+        
+        <div class="progress-area" id="progressArea" style="display: none;">
+            <h3>Processing...</h3>
+            <div id="progressDetails"></div>
+        </div>
+        
+        <div id="resultsTable" style="display: none;">
+            <h3>Results:</h3>
+            <table id="fullTable"></table>
+        </div>
+    </div>
+
+    <!-- Load SheetJS library -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const fileInput = document.getElementById('fileInput');
+            const processButton = document.getElementById('processButton');
+            const downloadButton = document.getElementById('downloadButton');
+            const statusDiv = document.getElementById('status');
+            const progressArea = document.getElementById('progressArea');
+            const progressDetails = document.getElementById('progressDetails');
+            const resultsTable = document.getElementById('resultsTable');
+            const fullTable = document.getElementById('fullTable');
+            
+            let processedData = null;
+            
+            processButton.addEventListener('click', processFile);
+            downloadButton.addEventListener('click', function() {
+                if (processedData) {
+                    const csvContent = generateCsv(processedData);
+                    downloadCsv(csvContent, 'donation_summary.csv');
+                }
+            });
+            
+            function processFile() {
+                const file = fileInput.files[0];
+                if (!file) {
+                    showStatus('Please select an Excel file first.', 'error');
+                    return;
+                }
+                
+                // Clear previous results
+                statusDiv.style.display = 'none';
+                progressArea.style.display = 'block';
+                resultsTable.style.display = 'none';
+                downloadButton.style.display = 'none';
+                progressDetails.innerHTML = 'Reading Excel file...';
+                
+                const reader = new FileReader();
+                
+                reader.onload = function(e) {
+                    try {
+                        const data = new Uint8Array(e.target.result);
+                        const workbook = XLSX.read(data, { type: 'array' });
+                        
+                        // Assume first sheet
+                        const firstSheetName = workbook.SheetNames[0];
+                        const worksheet = workbook.Sheets[firstSheetName];
+                        
+                        // Convert to JSON
+                        progressDetails.innerHTML = 'Converting to JSON...';
+                        const jsonData = XLSX.utils.sheet_to_json(worksheet);
+                        
+                        if (jsonData.length === 0) {
+                            showStatus('The Excel file appears to be empty.', 'error');
+                            progressArea.style.display = 'none';
+                            return;
+                        }
+                        
+                        // Process the data
+                        progressDetails.innerHTML = 'Processing data...';
+                        processedData = processDonationData(jsonData);
+                        
+                        // Show full results
+                        showFullResults(processedData);
+                        
+                        showStatus('Processing complete! You can view the results below or download as CSV.', 'success');
+                        progressArea.style.display = 'none';
+                        downloadButton.style.display = 'inline-block';
+                        
+                    } catch (error) {
+                        console.error('Error processing file:', error);
+                        showStatus('Error processing the file: ' + error.message, 'error');
+                        progressArea.style.display = 'none';
+                    }
+                };
+                
+                reader.onerror = function() {
+                    showStatus('Error reading the file.', 'error');
+                    progressArea.style.display = 'none';
+                };
+                
+                reader.readAsArrayBuffer(file);
+            }
+            
+            function processDonationData(jsonData) {
+                // Initialize data structure to store the results
+                const results = {};
+                const orderTypes = new Set();
+                
+                // Process the data
+                jsonData.forEach(row => {
+                    // Skip rows without valid data
+                    if (!row['Girl First Name'] || !row['Girl Last Name']) {
+                        return;
+                    }
+                    
+                    // Get girl scout name
+                    const scoutName = `${row['Girl First Name']} ${row['Girl Last Name']}`;
+                    
+                    // Get order type and donation amount
+                    const orderType = row['Order Type'];
+                    
+                    // Skip rows without valid order type
+                    if (!orderType) {
+                        return;
+                    }
+                    
+                    // Get donation packages
+                    const donation = parseInt(row['Donation']) || 0;
+                    
+                    // Skip if no donations
+                    if (donation === 0) {
+                        return;
+                    }
+                    
+                    // Keep track of all order types
+                    orderTypes.add(orderType);
+                    
+                    // Initialize nested structure if needed
+                    if (!results[scoutName]) {
+                        results[scoutName] = {};
+                    }
+                    
+                    // Initialize order type count if needed
+                    if (!results[scoutName][orderType]) {
+                        results[scoutName][orderType] = 0;
+                    }
+                    
+                    // Add donation to the total
+                    results[scoutName][orderType] += donation;
+                });
+                
+                // Filter out "Shipped with Donation" from order types
+                const filteredOrderTypes = Array.from(orderTypes).filter(type => type !== "Shipped with Donation").sort();
+                const rows = [];
+                
+                // Add header row
+                const header = ['Girl Scout', ...filteredOrderTypes, 'Total'];
+                rows.push(header);
+                
+                // Add data rows
+                Object.keys(results).sort().forEach(scoutName => {
+                    const orderCounts = results[scoutName];
+                    
+                    // Create row with scout name
+                    const row = [scoutName];
+                    
+                    // Calculate total
+                    let totalForScout = 0;
+                    
+                    // Add value for each order type, excluding "Shipped with Donation"
+                    filteredOrderTypes.forEach(orderType => {
+                        const count = orderCounts[orderType] || 0;
+                        row.push(count);
+                        totalForScout += count;
+                    });
+                    
+                    // Add total
+                    row.push(totalForScout);
+                    
+                    // Add to rows (keeping all rows, even with zero totals)
+                    rows.push(row);
+                });
+                
+                return rows;
+            }
+            
+            function generateCsv(rows) {
+                return rows.map(row => 
+                    row.map(value => 
+                        // Handle values with commas by quoting them
+                        typeof value === 'string' && value.includes(',') 
+                            ? `"${value}"` 
+                            : value
+                    ).join(',')
+                ).join('\n');
+            }
+            
+            function downloadCsv(csvContent, filename) {
+                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement('a');
+                
+                // Create a URL for the blob
+                const url = URL.createObjectURL(blob);
+                
+                link.setAttribute('href', url);
+                link.setAttribute('download', filename);
+                link.style.visibility = 'hidden';
+                
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
+            
+            function showFullResults(rows) {
+                fullTable.innerHTML = '';
+                
+                // Display all rows
+                rows.forEach((row, index) => {
+                    const tr = document.createElement('tr');
+                    
+                    row.forEach(cell => {
+                        const element = index === 0 ? 'th' : 'td';
+                        const cellElement = document.createElement(element);
+                        cellElement.textContent = cell;
+                        tr.appendChild(cellElement);
+                    });
+                    
+                    fullTable.appendChild(tr);
+                });
+                
+                resultsTable.style.display = 'block';
+            }
+            
+            function showStatus(message, type) {
+                statusDiv.textContent = message;
+                statusDiv.className = type;
+                statusDiv.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>
